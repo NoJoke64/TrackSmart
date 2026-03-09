@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Track Smart</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map { height: 100vh; width: 100%; z-index: 1; background: #f8fafc; }
+        
+        /* Map Marker Styles */
+        .pause-label {
+            background: transparent !important; border: none !important; box-shadow: none !important;
+            font-weight: 900; font-size: 13px; pointer-events: none; text-align: center;
+            display: flex; align-items: center; justify-content: center;
+            text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;
+        }
+        
+        .overlay { z-index: 2000; backdrop-filter: blur(12px); }
+        
+        #chartModal { 
+            z-index: 3000; 
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), height 0.05s linear;
+        }
+        .chart-hidden { transform: translateY(100%) !important; }
+        
+        #resizeHandle {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60px;
+            height: 24px;
+            cursor: ns-resize;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 3002;
+        }
+        .handle-bar {
+            width: 32px; height: 4px;
+            background: #e2e8f0; border-radius: 2px;
+            transition: background 0.2s;
+        }
+        #resizeHandle:hover .handle-bar { background: #cbd5e1; }
+        
+        .dot-clickable { cursor: pointer !important; outline: none !important; }
+        #infoMenu { transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+        .menu-hidden { transform: translateX(-110%); }
+        
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]:focus { outline: none; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 6px; cursor: pointer; background: #e2e8f0; border-radius: 3px; }
+        input[type=range]::-webkit-slider-thumb { height: 18px; width: 18px; border-radius: 50%; background: #3b82f6; cursor: pointer; -webkit-appearance: none; margin-top: -6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        
+        #dropZone.drag-over { border-color: #6366f1; background-color: #f5f3ff; transform: scale(1.02); }
+
+        .leaflet-popup-content-wrapper { border-radius: 1.25rem; padding: 0; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); overflow: hidden; border: 1px solid rgba(0,0,0,0.05); }
+        .leaflet-popup-content { margin: 0 !important; width: 220px !important; }
+        
+        #chartSettingsPopup { transition: all 0.2s ease-out; transform-origin: bottom right; }
+        .settings-hidden { opacity: 0; transform: scale(0.95) translateY(10px); pointer-events: none; }
+        
+        .toggle-bg { width: 36px; height: 18px; border-radius: 99px; position: relative; cursor: pointer; transition: background-color 0.2s; }
+        .toggle-knob { width: 12px; height: 12px; background: white; border-radius: 50%; position: absolute; top: 3px; transition: left 0.2s; }
+        .toggle-on { background-color: #3b82f6; }
+        .toggle-off { background-color: #cbd5e1; }
+
+        #chartPopup { 
+            position: absolute; 
+            z-index: 4000; 
+            pointer-events: none;
+            transition: opacity 0.1s;
+        }
+
+        .settings-btn {
+            position: relative;
+            width: 36px; height: 36px;
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            background: #f8fafc; color: #64748b;
+            transition: all 0.2s;
+        }
+        .settings-btn:hover { background: #f1f5f9; color: #334155; }
+        .settings-btn.active { background: #3b82f6; color: white; }
+        
+        .user-select-none { user-select: none; }
+    </style>
+</head>
+<body class="bg-slate-50 overflow-hidden font-sans">
+
+    <!-- Header / Main Controls -->
+    <div class="fixed top-4 left-4 z-[1001] flex flex-col gap-2 pointer-events-none">
+        <div class="bg-white/90 backdrop-blur shadow-xl border border-slate-200 p-4 rounded-2xl pointer-events-auto w-fit min-w-[180px]">
+            <div class="flex justify-between items-center mb-2 gap-4">
+                <h1 class="text-sm font-black text-slate-800 tracking-tight">Track Smart</h1>
+                <div class="flex gap-1">
+                    <button id="chartBtn" title="View Speed Timeline" onclick="toggleChartModal()" class="hidden w-8 h-8 flex items-center justify-center bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-xl transition-all active:scale-90">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+                    </button>
+                    <button id="infoBtn" title="View Analytics" onclick="toggleMenu()" class="hidden w-8 h-8 flex items-center justify-center bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl transition-all active:scale-90">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="flex flex-col gap-1.5 mb-3">
+                <div class="flex items-center gap-1 text-[8px] font-bold uppercase text-slate-500">
+                    <span class="w-2.5 h-2.5 rounded-full bg-red-500/50"></span> Stop (>1 min)
+                </div>
+                <div class="flex items-center gap-1 text-[8px] font-bold uppercase text-slate-500">
+                    <span class="w-2.5 h-2.5 rounded-full bg-indigo-500/50"></span> Area (Cluster)
+                </div>
+            </div>
+            <button onclick="showOverlay('uploadOverlay')" class="w-full px-4 bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest py-3 rounded-xl shadow-md active:scale-95 transition-transform flex items-center justify-center">
+                Import Track
+            </button>
+        </div>
+    </div>
+
+    <!-- Chart Popup -->
+    <div id="chartPopup" class="hidden bg-white shadow-2xl rounded-2xl border border-slate-100 p-4 min-w-[140px]">
+        <div id="chartPopupContent"></div>
+    </div>
+
+    <!-- Speed Timeline -->
+    <div id="chartModal" class="chart-hidden fixed bottom-0 left-0 right-0 h-[35vh] bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.1)] border-t border-slate-100 flex flex-col overflow-visible" onclick="closeChartPopup()">
+        
+        <div id="resizeHandle" onmousedown="initResize(event)" ontouchstart="initResize(event)">
+            <div class="handle-bar"></div>
+        </div>
+
+        <!-- Settings Popup -->
+        <div id="chartSettingsPopup" class="settings-hidden absolute bottom-full right-6 mb-4 z-[3001] w-64 bg-white shadow-2xl border border-slate-100 rounded-3xl p-5" onclick="event.stopPropagation()">
+            <h3 class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Graph Settings</h3>
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-slate-700">Include Pauses</span>
+                    <div id="pauseToggle" onclick="togglePauseInclusion()" class="toggle-bg toggle-on">
+                        <div class="toggle-knob left-[21px]"></div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-slate-700">Cluster Pauses</span>
+                    <div id="clusterToggle" onclick="toggleClusterPauses()" class="toggle-bg toggle-on">
+                        <div class="toggle-knob left-[21px]"></div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between">
+                    <div class="flex flex-col">
+                        <span class="text-xs font-bold text-slate-700">Binned Mode</span>
+                        <span class="text-[8px] text-slate-400 font-bold uppercase tracking-wide">Fluid Trend</span>
+                    </div>
+                    <div id="binnedToggle" onclick="toggleBinnedMode()" class="toggle-bg toggle-off">
+                        <div class="toggle-knob left-[3px]"></div>
+                    </div>
+                </div>
+                <div class="pt-2 border-t border-slate-50">
+                    <div class="flex justify-between items-center mb-2">
+                        <span id="smoothLabel" class="text-xs font-bold text-slate-700">Line Smoothness</span>
+                    </div>
+                    <input type="range" id="smoothSlider" min="1" max="100" value="15" class="w-full h-1 accent-blue-600">
+                </div>
+            </div>
+        </div>
+
+        <div class="px-6 py-3 md:px-8 flex justify-between items-center border-b border-slate-50">
+            <div class="flex items-center gap-4">
+                <h2 class="text-sm font-black text-slate-900 uppercase italic">Speed <span class="text-blue-600">Timeline</span></h2>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <button id="settingsToggleBtn" onclick="event.stopPropagation(); toggleSettingsPopup()" class="settings-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="2" y1="14" x2="6" y2="14"/><line x1="10" y1="8" x2="14" y2="8"/><line x1="18" y1="16" x2="22" y2="16"/>
+                    </svg>
+                </button>
+                <button onclick="toggleChartModal()" class="w-9 h-9 flex items-center justify-center bg-slate-50 text-slate-400 rounded-full hover:bg-slate-100 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+            </div>
+        </div>
+        
+        <div class="flex-1 px-4 py-2 relative min-h-0">
+            <canvas id="speedTimelineChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Analytics Slide-out -->
+    <div id="infoMenu" class="menu-hidden fixed top-4 left-4 z-[1002] w-72 bg-white shadow-2xl border border-slate-200 rounded-[2rem] pointer-events-auto overflow-hidden">
+        <div class="p-6">
+            <div class="flex justify-between items-center mb-6">
+                <p class="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Activity Analytics</p>
+                <button onclick="toggleMenu()" class="text-slate-400 hover:text-slate-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            
+            <div class="space-y-6">
+                <div>
+                    <label class="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Name</label>
+                    <p id="menuName" class="text-sm font-bold text-slate-800 truncate">No Data</p>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-slate-50 p-3 rounded-2xl">
+                        <label class="text-[8px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Distance</label>
+                        <p id="menuDist" class="text-lg font-black text-slate-800 tracking-tighter">0.0 km</p>
+                    </div>
+                    <div class="bg-amber-50 p-3 rounded-2xl border border-amber-100">
+                        <label class="text-[8px] font-bold text-amber-500 uppercase tracking-widest block mb-1">Avg Long Stop</label>
+                        <p id="menuAvgLong" class="text-lg font-black text-amber-600 tracking-tighter">0m</p>
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-indigo-50 p-3 rounded-2xl">
+                        <label class="text-[8px] font-bold text-indigo-400 uppercase tracking-widest block mb-1">Moving</label>
+                        <p id="menuMoving" class="text-lg font-black text-indigo-600 tracking-tighter">0h 0m</p>
+                    </div>
+                    <div class="bg-red-50 p-3 rounded-2xl">
+                        <label class="text-[8px] font-bold text-red-400 uppercase tracking-widest block mb-1">Total Stop</label>
+                        <p id="menuStopped" class="text-lg font-black text-red-600 tracking-tighter">0h 0m</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Interface -->
+    <div id="uploadOverlay" class="overlay fixed inset-0 bg-slate-900/60 flex items-center justify-center p-6">
+        <div class="bg-white rounded-[2rem] shadow-2xl p-8 w-fit max-w-[90vw] border border-white/20">
+            <div id="dropZone" class="border-2 border-dashed border-slate-200 rounded-[1.5rem] p-10 text-center cursor-pointer mb-4 flex flex-col items-center hover:border-indigo-400 transition-all min-w-[240px]">
+                <span class="text-4xl mb-3">📍</span>
+                <p class="text-[10px] text-indigo-600 font-black uppercase tracking-widest mb-1">Select Track</p>
+                <p class="text-[8px] text-slate-400 font-bold uppercase">Tap or Drop GPX/FIT files</p>
+                <input type="file" id="fileInput" class="hidden" accept=".gpx,.fit">
+            </div>
+            <button onclick="hideOverlays()" id="cancelBtn" class="hidden w-full py-2 text-slate-400 text-[9px] font-black uppercase tracking-widest text-center">Cancel</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const COLOR_STOP_RGBA = 'rgba(239, 68, 68, 0.5)';
+        const COLOR_STOP_HEX = '#ef4444'; 
+        const COLOR_STOP_TEXT = '#b91c1c';
+        const COLOR_AREA_RGBA = 'rgba(99, 102, 241, 0.5)';
+        const COLOR_AREA_HEX = '#6366f1';
+        const COLOR_AREA_TEXT = '#4338ca';
+
+        let map, markersLayer = L.layerGroup(), routeLayer = L.layerGroup();
+        let rawPauses = [], fullTrackCoords = [], originalSpeedData = [];
+        let chartInstance = null, smoothPercent = 0.05, highlightedStop = null;
+        let includePauses = true, clusterTimelinePauses = true, binnedMode = false;
+        let mouseX = -1, isResizing = false;
+
+        function formatMins(totalMins) {
+            totalMins = Math.round(totalMins);
+            if (totalMins < 60) return `${totalMins}m`;
+            return `${Math.floor(totalMins / 60)}h ${totalMins % 60}min`;
+        }
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false, attributionControl: false }).setView([20, 0], 2);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
+            routeLayer.addTo(map); markersLayer.addTo(map);
+            map.on('zoomend', renderClusters);
+            
+            const up = (v) => {
+                const normalized = parseInt(v) / 100;
+                smoothPercent = Math.pow(normalized, 3) * 0.4; 
+                if (!document.getElementById('chartModal').classList.contains('chart-hidden')) renderSpeedChart();
+            };
+            document.getElementById('smoothSlider').oninput = (e) => up(e.target.value);
+            up(document.getElementById('smoothSlider').value);
+
+            setupDragAndDrop();
+            showOverlay('uploadOverlay');
+            
+            window.addEventListener('mousemove', handleResize);
+            window.addEventListener('mouseup', stopResize);
+            window.addEventListener('touchmove', handleResize);
+            window.addEventListener('touchend', stopResize);
+            
+            document.getElementById('speedTimelineChart').addEventListener('mouseleave', () => closeChartPopup());
+        }
+
+        function initResize(e) {
+            e.preventDefault();
+            isResizing = true;
+            document.body.classList.add('user-select-none');
+            document.getElementById('chartModal').style.transition = 'none';
+        }
+
+        function handleResize(e) {
+            if (!isResizing) return;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const newHeightPercent = ((window.innerHeight - clientY) / window.innerHeight) * 100;
+            if (newHeightPercent >= 30 && newHeightPercent <= 70) {
+                document.getElementById('chartModal').style.height = `${newHeightPercent}vh`;
+                if (chartInstance) chartInstance.resize();
+            }
+        }
+
+        function stopResize() {
+            if (!isResizing) return;
+            isResizing = false;
+            document.body.classList.remove('user-select-none');
+            document.getElementById('chartModal').style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), height 0.05s linear';
+        }
+
+        function toggleSettingsPopup() { 
+            const p = document.getElementById('chartSettingsPopup');
+            p.classList.toggle('settings-hidden'); 
+            document.getElementById('settingsToggleBtn').classList.toggle('active', !p.classList.contains('settings-hidden'));
+        }
+
+        function toggleUI(id, state) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.className = `toggle-bg ${state ? 'toggle-on' : 'toggle-off'}`;
+            el.querySelector('.toggle-knob').style.left = state ? '21px' : '3px';
+        }
+
+        function togglePauseInclusion() { includePauses = !includePauses; toggleUI('pauseToggle', includePauses); renderSpeedChart(); }
+        
+        function toggleClusterPauses() { 
+            clusterTimelinePauses = !clusterTimelinePauses; 
+            toggleUI('clusterToggle', clusterTimelinePauses); 
+            renderSpeedChart(); 
+        }
+
+        function toggleBinnedMode() { 
+            binnedMode = !binnedMode; 
+            toggleUI('binnedToggle', binnedMode); 
+            document.getElementById('smoothLabel').textContent = binnedMode ? 'Binned Group Size' : 'Line Smoothness';
+            renderSpeedChart(); 
+        }
+
+        function setupDragAndDrop() {
+            const dz = document.getElementById('dropZone'), fi = document.getElementById('fileInput');
+            dz.onclick = () => fi.click();
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); ev.stopPropagation(); }));
+            dz.addEventListener('drop', e => { if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+            fi.onchange = (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); };
+        }
+
+        function handleFile(f) {
+            const r = new FileReader();
+            if (f.name.toLowerCase().endsWith('.fit')) { r.onload = (e) => finalizeImport(parseFIT(e.target.result), f.name); r.readAsArrayBuffer(f); }
+            else { r.onload = (e) => processGpx(e.target.result, f.name); r.readAsText(f); }
+        }
+
+        function toggleMenu() { document.getElementById('infoMenu').classList.toggle('menu-hidden'); }
+        function toggleChartModal() {
+            const m = document.getElementById('chartModal');
+            m.classList.toggle('chart-hidden');
+            if(!m.classList.contains('chart-hidden')) setTimeout(renderSpeedChart, 100);
+            else {
+                document.getElementById('chartSettingsPopup').classList.add('settings-hidden');
+                document.getElementById('settingsToggleBtn').classList.remove('active');
+                closeChartPopup();
+            }
+        }
+
+        function showOverlay(id) { hideOverlays(); document.getElementById(id).classList.remove('hidden'); }
+        function hideOverlays() { document.querySelectorAll('.overlay').forEach(el => el.classList.add('hidden')); }
+
+        function processGpx(xml, name) {
+            const d = new DOMParser().parseFromString(xml, "text/xml");
+            const pts = Array.from(d.querySelectorAll("trkpt")).map(p => ({
+                lat: parseFloat(p.getAttribute('lat')), lon: parseFloat(p.getAttribute('lon')),
+                time: p.querySelector('time') ? new Date(p.querySelector('time').textContent) : new Date()
+            }));
+            if (pts.length > 0) finalizeImport(pts, name);
+        }
+
+        function parseFIT(buf) {
+            const view = new DataView(buf); let off = view.getUint8(0);
+            const records = [], defs = new Map(), epoch = new Date('1989-12-31T00:00:00Z').getTime();
+            while (off < buf.byteLength - 2) {
+                const head = view.getUint8(off++);
+                const isDef = (head & 0x40) === 0x40, local = head & 0x0F;
+                if (isDef) {
+                    off++; off++; const global = view.getUint16(off, true);
+                    off += 2; const n = view.getUint8(off++);
+                    const fields = []; for (let i=0; i<n; i++) fields.push({id:view.getUint8(off++), size:view.getUint8(off++), type:view.getUint8(off++)});
+                    defs.set(local, { global, fields, arch: 0 });
+                } else {
+                    const def = defs.get(local); if (!def) break;
+                    let data = {};
+                    def.fields.forEach(f => {
+                        let val = null;
+                        try {
+                            if (f.size === 1) val = view.getUint8(off);
+                            else if (f.size === 2) val = view.getUint16(off, true);
+                            else if (f.size === 4) val = view.getUint32(off, true);
+                        } catch(e){}
+                        data[f.id] = val; off += f.size;
+                    });
+                    if (def.global === 20 && data[0]!==null) records.push({ lat: data[0]*(180/2**31), lon: data[1]*(180/2**31), time: new Date(epoch + (data[253]*1000)) });
+                }
+            }
+            return records;
+        }
+
+        function getDist(la1, lo1, la2, lo2) {
+            const R = 6371000, dLa = (la2-la1)*Math.PI/180, dLo = (lo2-lo1)*Math.PI/180;
+            const a = Math.sin(dLa/2)**2 + Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLo/2)**2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function finalizeImport(pts, name) {
+            pts.sort((a,b) => a.time - b.time);
+            
+            const validPts = [pts[0]];
+            for (let i = 1; i < pts.length; i++) {
+                const d = getDist(pts[i-1].lat, pts[i-1].lon, pts[i].lat, pts[i].lon);
+                const dt = (pts[i].time - pts[i-1].time) / 1000;
+                const s = dt > 0 ? (d/dt) * 3.6 : 0;
+                if (s < 250 || dt > 30) {
+                    validPts.push(pts[i]);
+                }
+            }
+
+            fullTrackCoords = validPts.map(p => [p.lat, p.lon]);
+            originalSpeedData = []; rawPauses = [];
+            let totalD = 0, totalStop = 0, startT = validPts[0].time;
+
+            validPts.forEach((p, i) => {
+                let s = 0; if (i > 0) {
+                    const d = getDist(validPts[i-1].lat, validPts[i-1].lon, p.lat, p.lon); 
+                    totalD += d;
+                    const dt = (p.time - validPts[i-1].time)/1000; 
+                    if (dt > 0) s = (d/dt)*3.6;
+                }
+                originalSpeedData.push({ t: (p.time-startT)/60000, v: Math.min(s, 220), lat: p.lat, lon: p.lon, dt: i>0?(p.time-validPts[i-1].time):0 });
+            });
+
+            let i = 0; while (i < validPts.length) {
+                let j = i+1; while (j < validPts.length) {
+                    if (getDist(validPts[i].lat, validPts[i].lon, validPts[j].lat, validPts[j].lon) > 25) {
+                        const dt = (validPts[j].time-validPts[i].time)/1000;
+                        if (dt >= 60) { 
+                            rawPauses.push({ lat: validPts[i].lat, lon: validPts[i].lon, duration: dt, midMin: ((validPts[i].time-startT)/60000 + (validPts[j].time-startT)/60000) / 2 }); 
+                            totalStop += dt; 
+                        }
+                        break;
+                    }
+                    j++;
+                }
+                if (j === validPts.length) break; i = j;
+            }
+
+            ['infoBtn','chartBtn','cancelBtn'].forEach(id => document.getElementById(id).classList.remove('hidden'));
+            document.getElementById('menuName').textContent = name;
+            document.getElementById('menuDist').textContent = (totalD/1000).toFixed(1) + ' km';
+            document.getElementById('menuStopped').textContent = formatMins(totalStop/60);
+            document.getElementById('menuMoving').textContent = formatMins(((validPts[validPts.length-1].time-validPts[0].time)/1000-totalStop)/60);
+            
+            routeLayer.clearLayers(); L.polyline(fullTrackCoords, {color:'#6366f1', weight:3, opacity:0.4}).addTo(routeLayer);
+            renderClusters(); map.fitBounds(fullTrackCoords, {padding:[60,60]}); hideOverlays();
+        }
+
+        function renderClusters() {
+            markersLayer.clearLayers(); let cls = []; const thr = 60;
+            rawPauses.forEach(p => {
+                const s = map.latLngToLayerPoint([p.lat, p.lon]);
+                let j = false; for (let c of cls) if (Math.sqrt((s.x-c.x)**2 + (s.y-c.y)**2) < thr) { c.duration += p.duration; c.members.push(p); j = true; break; }
+                if (!j) cls.push({ lat: p.lat, lon: p.lon, x: s.x, y: s.y, duration: p.duration, members: [p] });
+            });
+            cls.forEach(c => {
+                const mins = Math.round(c.duration/60), isG = c.members.length > 1;
+                const radius = (isG?16:10)+Math.sqrt(mins)*2.5;
+                const cir = L.circleMarker([c.lat, c.lon], { radius, fillColor: isG ? COLOR_AREA_HEX : COLOR_STOP_HEX, stroke: false, fillOpacity: 0.5, className: 'dot-clickable' }).addTo(markersLayer);
+                cir.bindTooltip(`${mins}`, { permanent: true, direction: 'center', className: 'pause-label', opacity: 1 });
+                cir.on('mouseover', () => { highlightedStop = c; renderSpeedChart(); });
+                cir.on('mouseout', () => { highlightedStop = null; renderSpeedChart(); });
+                cir.on('click', (e) => { L.DomEvent.stopPropagation(e); if (isG) map.flyTo([c.lat, c.lon], map.getZoom()+1); });
+            });
+        }
+
+        function closeChartPopup() {
+            const p = document.getElementById('chartPopup');
+            p.classList.add('hidden'); p.style.opacity = '0';
+            mouseX = -1; if (chartInstance) chartInstance.draw();
+        }
+
+        function updateTimelinePopup(x, y, data) {
+            const popup = document.getElementById('chartPopup');
+            const content = document.getElementById('chartPopupContent');
+            content.innerHTML = `
+                <div class="flex items-center gap-2 mb-1"><div class="w-1.5 h-1.5 rounded-full bg-blue-500"></div><span class="text-[9px] font-black uppercase text-slate-400 tracking-widest">${binnedMode ? 'Set Avg' : 'Stats'}</span></div>
+                <div class="text-sm font-black text-slate-800">${data.y.toFixed(1)} <span class="text-[10px] text-slate-400 font-bold">km/h</span></div>
+                <div class="text-[9px] font-bold text-slate-500 uppercase tracking-tighter mt-0.5">${formatMins(data.x)} elapsed</div>
+            `;
+            popup.style.left = `${x}px`; popup.style.top = `${y - 15}px`; popup.style.transform = `translate(-50%, -100%)`;
+            popup.classList.remove('hidden'); popup.style.opacity = '1';
+        }
+
+        function renderSpeedChart() {
+            const canvas = document.getElementById('speedTimelineChart');
+            if (!canvas || originalSpeedData.length === 0) return;
+            if (chartInstance) chartInstance.destroy();
+
+            let finalData = [];
+            if (!includePauses) {
+                let cumTime = 0;
+                originalSpeedData.forEach((d) => { if (d.v > 1.2) { cumTime += (d.dt / 60000); finalData.push({ x: cumTime, y: d.v }); } });
+            } else finalData = originalSpeedData.map(d => ({ x: d.t, y: d.v }));
+
+            let processedPoints = [];
+            if (binnedMode) {
+                const binSize = Math.max(1, Math.floor(finalData.length * (smoothPercent * 2))); 
+                for (let i = 0; i < finalData.length; i += binSize) {
+                    const bin = finalData.slice(i, i + binSize);
+                    processedPoints.push({ x: bin.reduce((a, b) => a + b.x, 0) / bin.length, y: bin.reduce((a, b) => a + b.y, 0) / bin.length });
+                }
+            } else {
+                const win = Math.max(1, Math.floor(finalData.length * smoothPercent));
+                processedPoints = finalData.map((d, i) => {
+                    const s = Math.max(0, i - Math.floor(win / 2)), e = Math.min(finalData.length, i + Math.floor(win / 2) + 1);
+                    let sum = 0; for (let k = s; k < e; k++) sum += finalData[k].y;
+                    return { x: d.x, y: sum / (e - s) };
+                });
+            }
+
+            chartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'line',
+                data: { datasets: [{ data: processedPoints, borderColor: '#3b82f6', borderWidth: 2, pointRadius: 0, fill: true, backgroundColor: 'rgba(59, 130, 246, 0.05)', tension: binnedMode ? 0.35 : 0.4 }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    interaction: { mode: 'index', intersect: false },
+                    onHover: (e) => {
+                        const {chartArea} = chartInstance;
+                        if (e.x >= chartArea.left && e.x <= chartArea.right) {
+                            mouseX = e.x;
+                            const near = processedPoints.reduce((p, c) => Math.abs(c.x - chartInstance.scales.x.getValueForPixel(e.x)) < Math.abs(p.x - chartInstance.scales.x.getValueForPixel(e.x)) ? c : p);
+                            updateTimelinePopup(canvas.getBoundingClientRect().left + chartInstance.scales.x.getPixelForValue(near.x), canvas.getBoundingClientRect().top + chartInstance.scales.y.getPixelForValue(near.y), near);
+                            chartInstance.draw(); 
+                        } else closeChartPopup();
+                    },
+                    scales: {
+                        x: { type: 'linear', title: { display: true, text: includePauses ? 'Elapsed Minutes' : 'Moving Minutes', font: { size: 10 } } },
+                        y: { beginAtZero: true, title: { display: true, text: 'km/h', font: { size: 10 } } }
+                    },
+                    plugins: { legend: false, tooltip: { enabled: false } }
+                },
+                plugins: [{
+                    id: 'customVisuals',
+                    afterDraw: (chart) => {
+                        const {ctx, scales: {x, y}, chartArea: {top, bottom, left, right}} = chart;
+                        if (mouseX >= left && mouseX <= right) {
+                            ctx.save(); ctx.beginPath(); ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+                            ctx.moveTo(mouseX, top); ctx.lineTo(mouseX, bottom); ctx.stroke(); ctx.restore();
+                        }
+                        if (includePauses) {
+                            if (clusterTimelinePauses) {
+                                let cList = []; const pxThr = 40;
+                                rawPauses.forEach(p => {
+                                    const px = x.getPixelForValue(p.midMin); let j = false;
+                                    for (let c of cList) if (Math.abs(px - c.avgPx) < pxThr) { c.duration += p.duration; c.members.push(p); c.avgPx = c.members.reduce((sum, m) => sum + x.getPixelForValue(m.midMin), 0) / c.members.length; j = true; break; }
+                                    if (!j) cList.push({ avgPx: px, duration: p.duration, members: [p] });
+                                });
+                                cList.forEach(c => {
+                                    const mins = Math.round(c.duration/60), isG = c.members.length > 1;
+                                    const radius = (isG?16:10)+Math.sqrt(mins)*2.5;
+                                    const closest = processedPoints.reduce((p, cr) => Math.abs(x.getPixelForValue(cr.x) - c.avgPx) < Math.abs(x.getPixelForValue(p.x) - c.avgPx) ? cr : p);
+                                    drawTimelineDot(ctx, c.avgPx, y.getPixelForValue(closest.y), radius, mins, isG);
+                                });
+                            } else {
+                                rawPauses.forEach(p => {
+                                    const mins = Math.round(p.duration/60);
+                                    const px = x.getPixelForValue(p.midMin);
+                                    const radius = 10 + Math.sqrt(mins)*2.5;
+                                    const closest = processedPoints.reduce((pr, cr) => Math.abs(x.getPixelForValue(cr.x) - px) < Math.abs(x.getPixelForValue(pr.x) - px) ? cr : pr);
+                                    drawTimelineDot(ctx, px, y.getPixelForValue(closest.y), radius, mins, false);
+                                });
+                            }
+                        }
+                        if (highlightedStop) {
+                            highlightedStop.members.forEach(m => {
+                                ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = highlightedStop.members.length > 1 ? COLOR_AREA_HEX : COLOR_STOP_HEX;
+                                ctx.beginPath(); ctx.moveTo(x.getPixelForValue(m.midMin), top); ctx.lineTo(x.getPixelForValue(m.midMin), bottom); ctx.stroke(); ctx.restore();
+                            });
+                        }
+                    }
+                }]
+            });
+        }
+
+        function drawTimelineDot(ctx, px, py, radius, text, isGroup) {
+            ctx.save(); ctx.beginPath(); ctx.arc(px, py, radius, 0, 2 * Math.PI);
+            ctx.fillStyle = isGroup ? COLOR_AREA_RGBA : COLOR_STOP_RGBA; ctx.fill();
+            ctx.font = "900 11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.fillStyle = "white"; for(let ox=-1; ox<=1; ox++) for(let oy=-1; oy<=1; oy++) ctx.fillText(text, px+ox, py+oy);
+            ctx.fillStyle = isGroup ? COLOR_AREA_TEXT : COLOR_STOP_TEXT; ctx.fillText(text, px, py);
+            ctx.restore();
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
